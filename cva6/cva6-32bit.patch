@@ -1,0 +1,263 @@
+diff --git a/include/riscv_pkg.sv b/include/riscv_pkg.sv
+index 58626cf..fc96515 100644
+--- a/include/riscv_pkg.sv
++++ b/include/riscv_pkg.sv
+@@ -28,7 +28,7 @@ package riscv;
+        ModeSv64 = 11
+     } vm_mode_t;
+ 
+-    localparam XLEN = 64;
++    localparam XLEN = 32;
+ 
+     // Warning: When using STD_CACHE, configuration must be PLEN=56 and VLEN=64
+     // Warning: VLEN must be superior or equal to PLEN
+diff --git a/Makefile b/Makefile
+index 950ebd8..e9c1afc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -43,6 +43,9 @@ ifndef RISCV
+ $(error RISCV not set - please point your RISCV variable to your RISCV installation)
+ endif
+ 
++# By default assume spike resides at the RISCV prefix.
++SPIKE_ROOT     ?= $(RISCV)
++
+ # setting additional xilinx board parameters for the selected board
+ ifeq ($(BOARD), genesys2)
+ 	XILINX_PART              := xc7k325tffg900-2
+@@ -114,6 +117,7 @@ dpi_hdr := $(wildcard tb/dpi/*.h)
+ dpi_hdr := $(addprefix $(root-dir), $(dpi_hdr))
+ CFLAGS := -I$(QUESTASIM_HOME)/include         \
+           -I$(RISCV)/include                  \
++          -I$(SPIKE_ROOT)/include             \
+           $(if $(DROMAJO), -I../tb/dromajo/src,) \
+           -std=c++11 -I../tb/dpi
+ 
+@@ -194,6 +198,7 @@ src :=  $(filter-out src/ariane_regfile.sv, $(wildcard src/*.sv))              \
+         src/tech_cells_generic/src/pulp_clock_mux2.sv                          \
+         tb/ariane_testharness.sv                                               \
+         tb/ariane_peripherals.sv                                               \
++        tb/trace_ip.sv                                                         \
+         tb/common/uart.sv                                                      \
+         tb/common/SimDTM.sv                                                    \
+         tb/common/SimJTAG.sv
+@@ -266,6 +271,9 @@ else
+ 	questa-cmd += +jtag_rbb_enable=0
+ endif
+ 
++generate-trace:
++	cat trace_ip.dasm | sed 's/^.*core/core/'| $(SPIKE_ROOT)/bin/spike-dasm
++
+ # Build the TB and module using QuestaSim
+ build: $(library) $(library)/.build-srcs $(library)/.build-tb $(dpi-library)/ariane_dpi.so dm_rtl_modif
+ 	# Optimize top level
+@@ -299,7 +307,7 @@ $(dpi-library)/%.o: tb/dpi/%.cc $(dpi_hdr)
+ $(dpi-library)/ariane_dpi.so: $(dpi)
+ 	mkdir -p $(dpi-library)
+ 	# Compile C-code and generate .so file
+-	$(CXX) -shared -m64 -o $(dpi-library)/ariane_dpi.so $? -L$(RISCV)/lib -Wl,-rpath,$(RISCV)/lib -lfesvr
++	$(CXX) -shared -m64 -o $(dpi-library)/ariane_dpi.so $? -L$(RISCV)/lib -L$(SPIKE_ROOT)/lib -Wl,-rpath,$(RISCV)/lib -Wl,-rpath,$(SPIKE_ROOT)/lib -lfesvr
+ 
+ GREP_FINDINGS := $(shell grep 'XLEN' src/riscv-dbg/src/dm_mem.sv)
+ dm_rtl_modif:
+@@ -314,19 +322,23 @@ endif
+ # the test names are defined in ci/riscv-asm-tests.list, and in ci/riscv-benchmarks.list
+ # if you want to run in batch mode, use make <testname> batch-mode=1
+ # alternatively you can call make sim elf-bin=<path/to/elf-bin> in order to load an arbitrary binary
++generate-trace-vsim:
++	make sim preload=$(preload) elf-bin= batch-mode=1
++	make generate-trace
++
+ sim: build
+ 	vsim${questa_version} +permissive $(questa-flags) $(questa-cmd) -lib $(library) +MAX_CYCLES=$(max_cycles) +UVM_TESTNAME=$(test_case) \
+-	+BASEDIR=$(riscv-test-dir) $(uvm-flags) $(QUESTASIM_FLAGS) -gblso $(RISCV)/lib/libfesvr.so -sv_lib $(dpi-library)/ariane_dpi  \
++	+BASEDIR=$(riscv-test-dir) $(uvm-flags) $(QUESTASIM_FLAGS) -gblso $(SPIKE_ROOT)/lib/libfesvr.a -sv_lib $(dpi-library)/ariane_dpi  \
+ 	${top_level}_optimized +permissive-off ++$(elf-bin) ++$(target-options) | tee sim.log
+ 
+ $(riscv-asm-tests): build
+ 	vsim${questa_version} +permissive $(questa-flags) $(questa-cmd) -lib $(library) +max-cycles=$(max_cycles) +UVM_TESTNAME=$(test_case) \
+-	+BASEDIR=$(riscv-test-dir) $(uvm-flags) +jtag_rbb_enable=0  -gblso $(RISCV)/lib/libfesvr.so -sv_lib $(dpi-library)/ariane_dpi        \
++	+BASEDIR=$(riscv-test-dir) $(uvm-flags) +jtag_rbb_enable=0  -gblso $(SPIKE_ROOT)/lib/libfesvr.a -sv_lib $(dpi-library)/ariane_dpi        \
+ 	${top_level}_optimized $(QUESTASIM_FLAGS) +permissive-off ++$(riscv-test-dir)/$@ ++$(target-options) | tee tmp/riscv-asm-tests-$@.log
+ 
+ $(riscv-amo-tests): build
+ 	vsim${questa_version} +permissive $(questa-flags) $(questa-cmd) -lib $(library) +max-cycles=$(max_cycles) +UVM_TESTNAME=$(test_case) \
+-	+BASEDIR=$(riscv-test-dir) $(uvm-flags) +jtag_rbb_enable=0  -gblso $(RISCV)/lib/libfesvr.so -sv_lib $(dpi-library)/ariane_dpi        \
++	+BASEDIR=$(riscv-test-dir) $(uvm-flags) +jtag_rbb_enable=0  -gblso $(SPIKE_ROOT)/lib/libfesvr.a -sv_lib $(dpi-library)/ariane_dpi        \
+ 	${top_level}_optimized $(QUESTASIM_FLAGS) +permissive-off ++$(riscv-test-dir)/$@ ++$(target-options) | tee tmp/riscv-amo-tests-$@.log
+ 
+ $(riscv-mul-tests): build
+@@ -399,7 +411,7 @@ verilate_command := $(verilator)
+                     $(if $(DROMAJO), -DDROMAJO=1,)                                                               \
+                     $(if $(PROFILE),--stats --stats-vars --profile-cfuncs,)                                      \
+                     $(if $(DEBUG),--trace --trace-structs,)                                                      \
+-                    -LDFLAGS "-L$(RISCV)/lib -Wl,-rpath,$(RISCV)/lib -lfesvr$(if $(PROFILE), -g -pg,) $(if $(DROMAJO), -L../tb/dromajo/src -ldromajo_cosim,) -lpthread" \
++                    -LDFLAGS "-L$(RISCV)/lib -L$(SPIKE_ROOT)/lib -Wl,-rpath,$(RISCV)/lib -Wl,-rpath,$(SPIKE_ROOT)/lib -lfesvr$(if $(PROFILE), -g -pg,) $(if $(DROMAJO), -L../tb/dromajo/src -ldromajo_cosim,) -lpthread" \
+                     -CFLAGS "$(CFLAGS)$(if $(PROFILE), -g -pg,) $(if $(DROMAJO), -DDROMAJO=1,)" -Wall --cc  --vpi \
+                     $(list_incdir) --top-module ariane_testharness                                               \
+                     --Mdir $(ver-library) -O3                                                                    \
+@@ -472,6 +484,10 @@ verilate: $(if $(DROMAJO), dromajo,) dm_rtl_modif
+ 	$(verilate_command)
+ 	cd $(ver-library) && $(MAKE) -j${NUM_JOBS} -f Variane_testharness.mk
+ 
++generate-trace-verilator:
++	make sim-verilator
++	make generate-trace
++
+ sim-verilator: verilate
+ 	$(ver-library)/Variane_testharness $(elf-bin)
+ 
+diff --git a/tb/ariane_testharness.sv b/tb/ariane_testharness.sv
+index ba8f9aa..000914b 100644
+--- a/tb/ariane_testharness.sv
++++ b/tb/ariane_testharness.sv
+@@ -722,6 +722,22 @@ module ariane_testharness #(
+     end
+   end
+ 
++  logic [31:0] cycles;
++  always_ff @(posedge clk_i or negedge ndmreset_n) begin
++    if (~ndmreset_n) begin
++      cycles <= 0;
++    end else begin
++      cycles <= cycles+1;
++    end
++  end
++
++  trace_ip  #(
++    .InclSimDTM(InclSimDTM),
++    .SIM_FINISH(2000000)
++  ) trace_ip_i (
++    .cycles(cycles)
++  ) ;
++
+ `ifdef AXI_SVA
+   // AXI 4 Assertion IP integration - You will need to get your own copy of this IP if you want
+   // to use it
+diff --git a/tb/trace_ip.sv b/tb/trace_ip.sv
+new file mode 100644
+index 0000000..60b777c
+--- /dev/null
++++ b/tb/trace_ip.sv
+@@ -0,0 +1,121 @@
++//#############################################################################
++//#
++//# Copyright 2020 Thales
++//#
++//# Licensed under the Solderpad Hardware Licence, Version 2.0 (the "License");
++//# you may not use this file except in compliance with the License.
++//# You may obtain a copy of the License at
++//#
++//#     https://solderpad.org/licenses/
++//#
++//# Unless required by applicable law or agreed to in writing, software
++//# distributed under the License is distributed on an "AS IS" BASIS,
++//# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++//# See the License for the specific language governing permissions and
++//# limitations under the License.
++//#
++//#############################################################################
++//#
++//# Original Author: Jean-Roch COULON (jean-roch.coulon@invia.fr)
++//#
++//#############################################################################
++
++import ariane_pkg::*;
++
++module trace_ip #(
++  parameter bit          InclSimDTM = 1'b0,
++  parameter int unsigned SIM_FINISH = 1000000
++)(
++  input logic [31:0]                    cycles
++);
++
++  // synthesis translate_off
++
++  int f;
++  logic [31:0] cycles_to_print;
++  logic [63:0] pc64;
++  logic [riscv::PLEN-1:0] address_host;
++  logic [63:0] data_host;
++
++  initial begin
++    f = $fopen("trace_ip.dasm", "w");
++  end
++
++  always_ff @(posedge i_ariane.clk_i or negedge i_ariane.rst_ni) begin
++    if (~i_ariane.rst_ni) begin
++    end else begin
++      string mode = "";
++      if (i_ariane.debug_mode) mode = "D";
++      else begin
++        case (i_ariane.priv_lvl)
++        riscv::PRIV_LVL_M: mode = "M";
++        riscv::PRIV_LVL_S: mode = "S";
++        riscv::PRIV_LVL_U: mode = "U";
++        endcase
++      end
++      for (int i = 0; i < NR_COMMIT_PORTS; i++) begin
++        pc64 = {{64-riscv::VLEN{1'b0}}, i_ariane.commit_instr_id_commit[i].pc};
++        if (i_ariane.commit_ack[i] && !i_ariane.commit_instr_id_commit[i].ex.valid) begin
++          $fwrite(f, "%d core   0: 0x%h (0x%h) DASM(%h)\n",
++                cycles_to_print,
++                pc64,
++                i_ariane.commit_instr_id_commit[i].ex.tval[31:0],
++                i_ariane.commit_instr_id_commit[i].ex.tval[31:0]);
++          if (ariane_pkg::is_rd_fpr(i_ariane.commit_instr_id_commit[i].op) == 0)
++            if (i_ariane.commit_instr_id_commit[i].rd[4:0] == 0)
++              $fwrite(f, "%h 0x%h (0x%h)\n",
++                i_ariane.priv_lvl,
++                pc64,
++                i_ariane.commit_instr_id_commit[i].ex.tval[31:0]);
++            else
++              $fwrite(f, "%h 0x%h (0x%h) x%d 0x%h\n",
++                i_ariane.priv_lvl,
++                pc64,
++                i_ariane.commit_instr_id_commit[i].ex.tval[31:0],
++                i_ariane.commit_instr_id_commit[i].rd[4:0],
++                i_ariane.wdata_commit_id[i][riscv::XLEN-1:0]);
++          else
++            $fwrite(f, "%h 0x%h (0x%h) f%d 0x%h\n",
++              i_ariane.priv_lvl,
++              pc64,
++              i_ariane.commit_instr_id_commit[i].ex.tval[31:0],
++              i_ariane.commit_instr_id_commit[i].rd[4:0],
++              i_ariane.commit_instr_id_commit[i].result[riscv::XLEN-1:0]);
++        end else if (i_ariane.commit_instr_id_commit[i].valid && i_ariane.commit_instr_id_commit[i].ex.valid && i_ariane.ex_commit.valid) begin
++          if (i_ariane.commit_instr_id_commit[i].ex.cause == 2) begin
++          end else begin
++            if (i_ariane.debug_mode) begin
++              $fwrite(f,"%d 0x%0h %s (0x%h) DASM(%h)\n", cycles_to_print, pc64, mode, i_ariane.commit_instr_id_commit[i].ex.tval[31:0], i_ariane.commit_instr_id_commit[i].ex.tval[31:0]);
++            end else if (i_ariane.commit_instr_id_commit[i].ex.cause != 24) begin
++              $fwrite(f, "%d core   0: 0x%h (0x%h) DASM(%h)\n",
++                cycles_to_print,
++                pc64,
++                i_ariane.commit_instr_id_commit[i].ex.tval[31:0],
++                i_ariane.commit_instr_id_commit[i].ex.tval[31:0]);
++              $fwrite(f, "core   0: exception %5d, epc 0x%h\n", i_ariane.commit_instr_id_commit[i].ex.cause, pc64);
++            end
++          end
++        end
++      end
++      cycles_to_print <= cycles;
++      if (cycles > SIM_FINISH) $finish(1);
++      if (i_ariane.ex_stage_i.lsu_i.dcache_req_ports_o[2].data_req) begin
++        address_host={i_ariane.ex_stage_i.lsu_i.dcache_req_ports_o[2].address_tag[DCACHE_TAG_WIDTH-1:0],
++                      i_ariane.ex_stage_i.lsu_i.dcache_req_ports_o[2].address_index[DCACHE_INDEX_WIDTH-1:0]};
++        data_host=i_ariane.ex_stage_i.lsu_i.dcache_req_ports_o[2].data_wdata[63:0];
++        if (address_host=='h80001000 && !InclSimDTM) begin
++          $fwrite(f, "write to host addr=%h data=%h\n", address_host, data_host);
++          $finish(0);
++        end
++      end
++    end
++  end
++
++  final begin
++    $fclose(f);
++  end
++
++  // synthesis translate_on
++
++endmodule // trace_ip
++

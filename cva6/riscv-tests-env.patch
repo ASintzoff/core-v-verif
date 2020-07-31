@@ -1,0 +1,33 @@
+diff --git a/p/riscv_test.h b/p/riscv_test.h
+index 88ca6c1..b76ad9e 100644
+--- a/p/riscv_test.h
++++ b/p/riscv_test.h
+@@ -97,13 +97,6 @@
+   li x31, 0;
+ 
+ #define INIT_PMP                                                        \
+-  la t0, 1f;                                                            \
+-  csrw mtvec, t0;                                                       \
+-  /* Set up a PMP to permit all accesses */                             \
+-  li t0, (1 << (31 + (__riscv_xlen / 64) * (53 - 31))) - 1;             \
+-  csrw pmpaddr0, t0;                                                    \
+-  li t0, PMP_NAPOT | PMP_R | PMP_W | PMP_X;                             \
+-  csrw pmpcfg0, t0;                                                     \
+   .align 2;                                                             \
+ 1:
+ 
+diff --git a/v/vm.c b/v/vm.c
+index 6bf05f7..71700f5 100644
+--- a/v/vm.c
++++ b/v/vm.c
+@@ -17,8 +17,8 @@
+ void trap_entry();
+ void pop_tf(trapframe_t*);
+ 
+-volatile uint64_t tohost;
+-volatile uint64_t fromhost;
++extern volatile uint64_t tohost;
++extern volatile uint64_t fromhost;
+ 
+ static void do_tohost(uint64_t tohost_value)
+ {
